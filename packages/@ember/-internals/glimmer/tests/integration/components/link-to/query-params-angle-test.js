@@ -240,6 +240,70 @@ if (EMBER_GLIMMER_ANGLE_BRACKET_BUILT_INS) {
         });
       }
 
+      ['@test generates proper href for `LinkTo` with no @route after transitioning to an error route'](
+        assert
+      ) {
+        this.router.map(function() {
+          this.route('bad');
+        });
+
+        this.add(
+          'controller:index',
+          Controller.extend({
+            queryParams: ['baz'],
+          })
+        );
+
+        this.add(
+          'route:bad',
+          Route.extend({
+            model() {
+              return RSVP.reject('boo!');
+            },
+          })
+        );
+
+        this.addTemplate(
+          'index',
+          `
+          <LinkTo id="bad-link" @route="bad">
+            Bad
+          </LinkTo>
+
+          {{#if this.showGoodLink}}
+            <LinkTo id="good-link" @query={{hash baz='lol'}}>
+              Good
+            </LinkTo>
+          {{/if}}
+          `
+        );
+
+        return this.visit('/').then(async () => {
+          let badLink = this.$('#bad-link');
+          assert.equal(badLink.attr('href'), '/bad');
+
+          assert.equal(this.$('#good-link').length, 0, 'good-link should not yet be in the DOM');
+
+          assert.throws(() => runTask(() => this.click('#bad-link')), /(boo!)/);
+
+          let indexController = this.getController('index');
+          indexController.set('showGoodLink', true);
+          await runLoopSettled();
+
+          assert.equal(this.$('#good-link').length, 1, 'good-link should now be in the DOM');
+          let goodLink = this.$('#good-link');
+          assert.equal(goodLink.attr('href'), '/?baz=lol');
+
+          runTask(() => this.click('#good-link'));
+
+          assert.deepEqual(
+            indexController.getProperties('baz'),
+            { baz: 'lol' },
+            'index controller QP properties updated'
+          );
+        });
+      }
+
       ['@test supplied QP properties can be bound'](assert) {
         this.addTemplate(
           'index',
