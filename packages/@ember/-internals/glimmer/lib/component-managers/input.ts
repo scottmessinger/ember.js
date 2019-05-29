@@ -30,12 +30,12 @@ const EMPTY_POSITIONAL_ARGS: VersionedPathReference[] = [];
 
 debugFreeze(EMPTY_POSITIONAL_ARGS);
 
-export default class InputComponentManager extends InternalComponentManager<InputComponentState> {
+export default class InputComponentManager extends InternalComponentManager<InputComponentState, Destroyable> {
   getCapabilities(): ComponentCapabilities {
     return CAPABILITIES;
   }
 
-  prepareArgs(_state: InternalDefinitionState, args: Arguments): PreparedArguments {
+  prepareArgs(_state: InternalDefinitionState<Destroyable>, args: Arguments): PreparedArguments {
     assert(
       'The `<Input />` component does not take any positional arguments',
       args.positional.length === 0
@@ -54,7 +54,7 @@ export default class InputComponentManager extends InternalComponentManager<Inpu
 
   create(
     _env: Environment,
-    { ComponentClass }: InternalDefinitionState,
+    { ComponentClass }: InternalDefinitionState<Destroyable>,
     args: Arguments,
     _dynamicScope: DynamicScope,
     caller: VersionedPathReference

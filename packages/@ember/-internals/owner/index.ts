@@ -26,7 +26,7 @@ export interface EngineInstanceOptions {
 }
 
 export interface Owner {
-  lookup<T>(fullName: string, options?: LookupOptions): T;
+  lookup<T>(fullName: string, options?: LookupOptions): T | undefined;
   lookup(fullName: string, options?: LookupOptions): any;
   factoryFor<T, C>(fullName: string, options?: LookupOptions): Factory<T, C> | undefined;
   factoryFor(fullName: string, options?: LookupOptions): Factory<any, any> | undefined;

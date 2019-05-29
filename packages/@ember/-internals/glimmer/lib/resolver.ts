@@ -1,7 +1,7 @@
 import { privatize as P } from '@ember/-internals/container';
 import { ENV } from '@ember/-internals/environment';
-import { LookupOptions, Owner, setOwner } from '@ember/-internals/owner';
-import { lookupComponent, lookupPartial, OwnedTemplateMeta } from '@ember/-internals/views';
+import { Factory, LookupOptions, Owner, setOwner } from '@ember/-internals/owner';
+import { lookupPartial, OwnedTemplateMeta } from '@ember/-internals/views';
 import {
   EMBER_GLIMMER_ANGLE_BRACKET_BUILT_INS,
   EMBER_GLIMMER_FN_HELPER,
@@ -22,7 +22,7 @@ import CompileTimeLookup from './compile-time-lookup';
 import { CurlyComponentDefinition } from './component-managers/curly';
 import { CustomManagerDefinition, ManagerDelegate } from './component-managers/custom';
 import InternalComponentManager, {
-  InternalComponentDefinition,
+  InternalComponentClass, InternalComponentDefinition,
 } from './component-managers/internal';
 import { TemplateOnlyComponentDefinition } from './component-managers/template-only';
 import { isHelperFactory, isSimpleHelper } from './helper';
@@ -50,6 +50,7 @@ import { populateMacros } from './syntax';
 import { mountHelper } from './syntax/mount';
 import { outletHelper } from './syntax/outlet';
 import { Factory as TemplateFactory, Injections, OwnedTemplate } from './template';
+import { getComponentTemplate } from './utils/component-template';
 import { getModifierManager } from './utils/custom-modifier-manager';
 import { getManager } from './utils/managers';
 import { ClassBasedHelperReference, SimpleHelperReference } from './utils/references';
@@ -63,6 +64,98 @@ function makeOptions(moduleName: string, namespace?: string): LookupOptions {
     source: moduleName !== undefined ? `template:${moduleName}` : undefined,
     namespace,
   };
+}
+
+function componentFor(name: string, owner: Owner, options?: LookupOptions): Option<Factory<{}, {}>> {
+  let fullName = `component:${name}`;
+  return owner.factoryFor(fullName, options) || null;
+}
+
+function layoutFor(name: string, owner: Owner, options?: LookupOptions): Option<OwnedTemplate> {
+  let templateFullName = `template:components/${name}`;
+
+  return owner.lookup(templateFullName, options) || null;
+}
+
+function lookupModuleUnificationComponentPair(owner: Owner, name: string, options?: LookupOptions): Option<LookupResult> {
+  let localComponent = componentFor(name, owner, options);
+  let localLayout = layoutFor(name, owner, options);
+
+  let globalComponent = componentFor(name, owner);
+  let globalLayout = layoutFor(name, owner);
+
+  // TODO: we shouldn't have to recheck fallback, we should have a lookup that doesn't fallback
+  if (
+    localComponent !== null &&
+    globalComponent !== null &&
+    globalComponent.class === localComponent.class
+  ) {
+    localComponent = null;
+  }
+  if (
+    localLayout !== null &&
+    globalLayout !== null &&
+    localLayout.referrer.moduleName === globalLayout.referrer.moduleName
+  ) {
+    localLayout = null;
+  }
+
+  if (localComponent !== null || localLayout !== null) {
+    return { component: localComponent, layout: localLayout } as LookupResult;
+  } else if (globalComponent !== null || globalLayout !== null) {
+    return { component: globalComponent, layout: globalLayout } as LookupResult;
+  } else {
+    return null
+  }
+}
+
+type LookupResult = {
+  component: Factory<{}, {}>, layout: OwnedTemplate
+} | {
+  component: Factory<{}, {}>, layout: null
+} | {
+  component: null, layout: OwnedTemplate
+};
+
+function lookupComponentPair(owner: Owner, name: string, options?: LookupOptions): Option<LookupResult> {
+  let component = componentFor(name, owner, options);
+
+  if (component !== null) {
+    let factory = getComponentTemplate(component);
+
+    if (factory !== null) {
+      throw new Error('TODO: fix factory to take owner');
+      // return { component, layout: factory.create(owner) };
+    }
+  }
+
+  let layout = layoutFor(name, owner, options);
+
+  if (component === null && layout === null) {
+    return null;
+  } else {
+    return { component, layout } as LookupResult;
+  }
+}
+
+function lookupComponent(owner: Owner, name: string, options: LookupOptions): Option<LookupResult> {
+  if (options.source || options.namespace) {
+    if (EMBER_MODULE_UNIFICATION) {
+      return lookupModuleUnificationComponentPair(owner, name, options);
+    }
+
+    let pair = lookupComponentPair(owner, name, options);
+
+    if (pair !== null) {
+      return pair;
+    }
+  }
+
+  if (EMBER_MODULE_UNIFICATION) {
+    return lookupModuleUnificationComponentPair(owner, name);
+  }
+
+  return lookupComponentPair(owner, name);
 }
 
 interface IBuiltInHelpers {
@@ -123,7 +216,6 @@ export default class RuntimeResolver implements IRuntimeResolver<OwnedTemplateMe
   // supports directly imported late bound layouts on component.prototype.layout
   private templateCache: Map<Owner, Map<TemplateFactory, OwnedTemplate>> = new Map();
   private componentDefinitionCache: Map<object, ComponentDefinition | null> = new Map();
-  private customManagerCache: Map<string, ManagerDelegate<Opaque>> = new Map();
 
   public templateCacheHits = 0;
   public templateCacheMisses = 0;
@@ -346,14 +438,14 @@ export default class RuntimeResolver implements IRuntimeResolver<OwnedTemplateMe
       name = parsed.name;
       namespace = parsed.namespace;
     }
-    let { layout, component } = lookupComponent(owner, name, makeOptions(moduleName, namespace));
 
-    let key = component === undefined ? layout : component;
+    let pair = lookupComponent(owner, name, makeOptions(moduleName, namespace));
 
-    if (key === undefined) {
+    if (pair === null) {
       return null;
     }
 
+    let key = pair.component === null ? pair.layout : pair.component;
     let cachedComponentDefinition = this.componentDefinitionCache.get(key);
     if (cachedComponentDefinition !== undefined) {
       return cachedComponentDefinition;
@@ -363,30 +455,33 @@ export default class RuntimeResolver implements IRuntimeResolver<OwnedTemplateMe
 
     let definition: Option<ComponentDefinition> = null;
 
-    if (layout !== undefined && component === undefined && ENV._TEMPLATE_ONLY_GLIMMER_COMPONENTS) {
-      definition = new TemplateOnlyComponentDefinition(layout);
+    if (pair.component === null && ENV._TEMPLATE_ONLY_GLIMMER_COMPONENTS) {
+      definition = new TemplateOnlyComponentDefinition(pair.layout);
     }
 
-    if (component !== undefined && component.class !== undefined) {
-      let wrapper = getManager(component.class);
+    if (pair.component !== null) {
+      assert(`missing component class ${name}`, pair.component.class !== undefined);
+
+      let ComponentClass = pair.component.class!;
+      let wrapper = getManager(ComponentClass);
 
       if (wrapper && wrapper.type === 'component') {
         let { factory } = wrapper;
 
         if (wrapper.internal) {
-          assert(`missing layout for internal component ${name}`, layout !== undefined);
+          assert(`missing layout for internal component ${name}`, pair.layout !== null);
 
           definition = new InternalComponentDefinition(
-            factory(owner) as InternalComponentManager<Opaque>,
-            component.class,
-            layout!
+            factory(owner) as InternalComponentManager<unknown, unknown>,
+            ComponentClass as InternalComponentClass<unknown>,
+            pair.layout!
           );
         } else {
           definition = new CustomManagerDefinition(
             name,
-            component,
+            pair.component,
             factory(owner) as ManagerDelegate<Opaque>,
-            layout || owner.lookup<OwnedTemplate>(P`template:components/-default`)
+            pair.layout || owner.lookup<OwnedTemplate>(P`template:components/-default`)!
           );
         }
       }
@@ -395,25 +490,14 @@ export default class RuntimeResolver implements IRuntimeResolver<OwnedTemplateMe
     if (definition === null) {
       definition = new CurlyComponentDefinition(
         name,
-        component || owner.factoryFor(P`component:-default`),
+        pair.component || owner.factoryFor(P`component:-default`),
         null,
-        layout! // TODO fix type
+        pair.layout! // TODO fix type
       );
     }
 
     finalizer();
     this.componentDefinitionCache.set(key, definition);
     return definition;
-  }
-
-  _lookupComponentManager(owner: Owner, managerId: string): ManagerDelegate<Opaque> {
-    if (this.customManagerCache.has(managerId)) {
-      return this.customManagerCache.get(managerId)!;
-    }
-    let delegate = owner.lookup<ManagerDelegate<Opaque>>(`component-manager:${managerId}`);
-
-    this.customManagerCache.set(managerId, delegate);
-
-    return delegate;
   }
 }
