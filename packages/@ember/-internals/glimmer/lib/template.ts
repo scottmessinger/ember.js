@@ -1,8 +1,13 @@
-import { getOwner } from '@ember/-internals/owner';
+import { privatize as P } from '@ember/-internals/container';
+import { getOwner, Owner, setOwner } from '@ember/-internals/owner';
 import { OwnedTemplateMeta, StaticTemplateMeta } from '@ember/-internals/views';
 import { Template } from '@glimmer/interfaces';
 import { LazyCompiler, templateFactory, TemplateFactory } from '@glimmer/opcode-compiler';
 import { SerializedTemplateWithLazyBlock } from '@glimmer/wire-format';
+
+export interface NewTemplateFactory {
+  (owner: Owner): OwnedTemplate;
+}
 
 export type StaticTemplate = SerializedTemplateWithLazyBlock<StaticTemplateMeta>;
 export type OwnedTemplate = Template<OwnedTemplateMeta>;
@@ -20,6 +25,7 @@ export interface Factory {
   id: string;
   meta: StaticTemplateMeta;
   create(injections: Injections): OwnedTemplate;
+  toNewTemplateFactory(): NewTemplateFactory;
 }
 
 class FactoryWrapper implements Factory {
@@ -34,5 +40,17 @@ class FactoryWrapper implements Factory {
   create(injections: Injections): OwnedTemplate {
     const owner = getOwner(injections);
     return this.factory.create(injections.compiler, { owner });
+  }
+
+  toNewTemplateFactory(): NewTemplateFactory {
+    return (owner: Owner) => {
+      let options = {
+        compiler: owner.lookup(P`template-compiler:main`) as any,
+      };
+
+      setOwner(options, owner);
+
+      return this.create(options);
+    };
   }
 }

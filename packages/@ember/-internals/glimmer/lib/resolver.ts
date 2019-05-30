@@ -6,6 +6,7 @@ import {
   EMBER_GLIMMER_ANGLE_BRACKET_BUILT_INS,
   EMBER_GLIMMER_FN_HELPER,
   EMBER_GLIMMER_ON_MODIFIER,
+  EMBER_GLIMMER_SET_COMPONENT_TEMPLATE,
   EMBER_MODULE_UNIFICATION,
 } from '@ember/canary-features';
 import { assert } from '@ember/debug';
@@ -22,7 +23,8 @@ import CompileTimeLookup from './compile-time-lookup';
 import { CurlyComponentDefinition } from './component-managers/curly';
 import { CustomManagerDefinition, ManagerDelegate } from './component-managers/custom';
 import InternalComponentManager, {
-  InternalComponentClass, InternalComponentDefinition,
+  InternalComponentClass,
+  InternalComponentDefinition,
 } from './component-managers/internal';
 import { TemplateOnlyComponentDefinition } from './component-managers/template-only';
 import { isHelperFactory, isSimpleHelper } from './helper';
@@ -66,7 +68,11 @@ function makeOptions(moduleName: string, namespace?: string): LookupOptions {
   };
 }
 
-function componentFor(name: string, owner: Owner, options?: LookupOptions): Option<Factory<{}, {}>> {
+function componentFor(
+  name: string,
+  owner: Owner,
+  options?: LookupOptions
+): Option<Factory<{}, {}>> {
   let fullName = `component:${name}`;
   return owner.factoryFor(fullName, options) || null;
 }
@@ -77,7 +83,11 @@ function layoutFor(name: string, owner: Owner, options?: LookupOptions): Option<
   return owner.lookup(templateFullName, options) || null;
 }
 
-function lookupModuleUnificationComponentPair(owner: Owner, name: string, options?: LookupOptions): Option<LookupResult> {
+function lookupModuleUnificationComponentPair(
+  owner: Owner,
+  name: string,
+  options?: LookupOptions
+): Option<LookupResult> {
   let localComponent = componentFor(name, owner, options);
   let localLayout = layoutFor(name, owner, options);
 
@@ -105,27 +115,38 @@ function lookupModuleUnificationComponentPair(owner: Owner, name: string, option
   } else if (globalComponent !== null || globalLayout !== null) {
     return { component: globalComponent, layout: globalLayout } as LookupResult;
   } else {
-    return null
+    return null;
   }
 }
 
-type LookupResult = {
-  component: Factory<{}, {}>, layout: OwnedTemplate
-} | {
-  component: Factory<{}, {}>, layout: null
-} | {
-  component: null, layout: OwnedTemplate
-};
+type LookupResult =
+  | {
+      component: Factory<{}, {}>;
+      layout: OwnedTemplate;
+    }
+  | {
+      component: Factory<{}, {}>;
+      layout: null;
+    }
+  | {
+      component: null;
+      layout: OwnedTemplate;
+    };
 
-function lookupComponentPair(owner: Owner, name: string, options?: LookupOptions): Option<LookupResult> {
+function lookupComponentPair(
+  owner: Owner,
+  name: string,
+  options?: LookupOptions
+): Option<LookupResult> {
   let component = componentFor(name, owner, options);
 
-  if (component !== null) {
-    let factory = getComponentTemplate(component);
+  if (EMBER_GLIMMER_SET_COMPONENT_TEMPLATE) {
+    if (component !== null && component.class !== undefined) {
+      let factory = getComponentTemplate(component.class);
 
-    if (factory !== null) {
-      throw new Error('TODO: fix factory to take owner');
-      // return { component, layout: factory.create(owner) };
+      if (factory !== null) {
+        return { component, layout: factory(owner) };
+      }
     }
   }
 
