@@ -1,5 +1,12 @@
 import { EMBER_METAL_TRACKED_PROPERTIES } from '@ember/canary-features';
-import { Object as EmberObject, ArrayProxy, PromiseProxyMixin } from '@ember/-internals/runtime';
+import {
+  Object as EmberObject,
+  ArrayProxy,
+  ObjectProxy,
+  PromiseProxyMixin,
+} from '@ember/-internals/runtime';
+import { later } from '@ember/runloop';
+import { set } from '@ember/-internals/metal';
 import { tracked, nativeDescDecorator as descriptor } from '@ember/-internals/metal';
 import { Promise } from 'rsvp';
 import { moduleFor, RenderingTestCase, strip, runTask } from 'internal-test-helpers';
@@ -43,6 +50,82 @@ if (EMBER_METAL_TRACKED_PROPERTIES) {
 
         runTask(() => this.context.set('first', 'max'));
         this.assertText('max jackson | max jackson');
+      }
+
+      '@test returning null and then later a Promise in un-memoized getter does not cause Maximum call stack size exceeded'(
+        assert
+      ) {
+        let ObjectPromiseProxy = ObjectProxy.extend(PromiseProxyMixin);
+        let done = assert.async();
+
+        class LoaderComponent extends GlimmerishComponent {
+          get data() {
+            if (this.args.id === null) {
+              return null;
+            } else {
+              let promise = new Promise((resolve, reject) => {
+                resolve(this.args.id);
+              });
+              return ObjectPromiseProxy.create({ promise: promise });
+            }
+          }
+        }
+
+        this.registerComponent('loader', {
+          ComponentClass: LoaderComponent,
+          template: '{{this.data.isPending}} {{this.data.isFulfilled}} {{this.data.content}}',
+        });
+
+        this.render('<Loader @id={{id}}/>', {
+          id: null,
+        });
+
+        setTimeout(() => {
+          this.context.set('id', 'one');
+          done();
+        }, 200);
+
+        this.assertText('true false one');
+      }
+
+      '@test returning null and then later a Promise in un-memoized getter does not cause perpetual rerenders'(
+        assert
+      ) {
+        let ObjectPromiseProxy = ObjectProxy.extend(PromiseProxyMixin);
+        let done = assert.async();
+
+        class LoaderComponent extends GlimmerishComponent {
+          async anAsyncFunction(id) {
+            let result = await new Promise((resolve, reject) => {
+              resolve(this.args.id);
+            });
+            return result;
+          }
+
+          get data() {
+            if (this.args.id === null) {
+              return null;
+            } else {
+              return ObjectPromiseProxy.create({ promise: this.anAsyncFunction(this.args.id) });
+            }
+          }
+        }
+
+        this.registerComponent('loader', {
+          ComponentClass: LoaderComponent,
+          template: '{{this.data.isPending}} {{this.data.isFulfilled}} {{this.data.content}}',
+        });
+
+        this.render('<Loader @id={{id}}/>', {
+          id: null,
+        });
+
+        setTimeout(() => {
+          this.context.set('id', 'one');
+          done();
+        }, 200);
+
+        this.assertText('true false one');
       }
 
       '@test returning ArrayProxy in un-memoized getter does not cause perpetual rerenders'() {
